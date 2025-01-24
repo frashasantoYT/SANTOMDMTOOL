@@ -2,6 +2,10 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QGridLayout, QLabel,
     QPushButton, QTextEdit, QHBoxLayout, QFileDialog
 )
+import sys
+from PyQt5.QtWidgets import QApplication, QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
+from PyQt5.QtGui import QFont
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 
 from PyQt5.QtWidgets import (
@@ -27,10 +31,207 @@ from PyQt5.QtWidgets import QApplication, QLabel, QMainWindow, QPushButton, QVBo
 from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import QFileDialog, QInputDialog
-
+import threading
+import queue
 import os
 import json
 import time
+from threading import Thread
+import queue
+
+
+class RunInteractiveThread(QThread):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+
+    def enqueue_output(self, stream, queue):
+        for line in iter(stream.readline, ''):
+            queue.put(line)
+        stream.close()
+
+    def run(self):
+        self.run_sant1_interactive()
+
+    def run_sant1_interactive(self):
+        """Run sant1 interactively and execute subsequent commands."""
+       
+        try:
+            # Start the adb shell subprocess
+            adb_shell = subprocess.Popen(
+                ["adb", "shell"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            stdout_queue = queue.Queue()
+            stderr_queue = queue.Queue()
+
+            stdout_thread = Thread(target=self.enqueue_output, args=(adb_shell.stdout, stdout_queue))
+            stderr_thread = Thread(target=self.enqueue_output, args=(adb_shell.stderr, stderr_queue))
+            stdout_thread.start()
+            stderr_thread.start()
+
+            # Write the command to execute 'sant1'
+            adb_shell.stdin.write("/data/local/tmp/sant1\n")
+            adb_shell.stdin.flush()
+          
+
+            # Wait for initialization
+            time.sleep(5)
+
+            # Define interactive commands
+            interactive_commands = [
+                ("Executing service call 36...", '"service call knoxguard_service 36"'),
+                ("Executing service call 40 (bypass)...", '"service call knoxguard_service 40 s16 \'null\'"'),
+                ("Executing service call 39 (finalizing)...", '"service call knoxguard_service 39"'),
+                ("Exiting interactive mode...", "exit"),
+            ]
+
+            # Execute each interactive command
+            for log, command in interactive_commands:
+               
+                adb_shell.stdin.write(command + "\n")
+                adb_shell.stdin.flush()
+                time.sleep(2)
+
+            # Exit the adb shell
+            adb_shell.stdin.write("exit\n")
+            adb_shell.stdin.flush()
+
+            # Process remaining output
+            stdout_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
+
+            while not stdout_queue.empty():
+                self.parent.log_signal.emit(f"<span style='color:green;'>STDOUT: {stdout_queue.get()}</span>")
+            while not stderr_queue.empty():
+                self.parent.log_signal.emit(f"<span style='color:red;'>STDERR: {stderr_queue.get()}</span>")
+
+            adb_shell.wait()
+
+        except Exception as e:
+            print(f'{str(e)}')
+
+        # Once the interactive portion is complete, run the remaining commands
+        self.run_remaining_commands()
+
+    def run_remaining_commands(self):
+        """Run commands after sant1 interactive mode."""
+        commands = [
+            ("Checking KG lock state (knox.kg.state)...", "adb shell getprop knox.kg.state"),
+            ("Checking KG lock state (kg.knox.state)...", "adb shell getprop kg.knox.state"),
+            ("Removing temporary files...", "adb shell rm /data/local/tmp/*.*"),
+            ("Removing 'sant1' file...", "adb shell rm -rf /data/local/tmp/sant1"),
+            ("Stopping FOTA agent service...", "adb shell am force-stop --user 0 com.sdet.fotaagent"),
+            ("Uninstalling FOTA agent app...", "adb shell pm uninstall --user 0 com.sdet.fotaagent"),
+            ("Checking KG lock state one last time...", "adb shell getprop knox.kg.state"),
+            ("Rebooting the device...", "adb reboot"),
+        ]
+
+        # Start a new CommandThread for the remaining commands
+        self.command_thread = CommandThread(commands=commands, delay=1.0)
+        self.command_thread.log_signal.connect(self.parent.append_log)
+        self.command_thread.finished.connect(self.parent.enable_buttons)
+        self.command_thread.start()
+
+
+class RunKgActiveOS13Thread(QThread):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+
+    def enqueue_output(self, stream, queue):
+        for line in iter(stream.readline, ''):
+            queue.put(line)
+        stream.close()
+
+    def run(self):
+        self.run_Sys3_interactive()
+
+    def run_Sys3_interactive(self):
+        """Run sant1 interactively and execute subsequent commands."""
+        try:
+            # Start the adb shell subprocess
+            adb_shell = subprocess.Popen(
+                ["adb", "shell"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            # Queues to capture stdout and stderr asynchronously
+            stdout_queue = queue.Queue()
+            stderr_queue = queue.Queue()
+
+            # Threads for reading stdout and stderr
+            stdout_thread = Thread(target=self.enqueue_output, args=(adb_shell.stdout, stdout_queue))
+            stderr_thread = Thread(target=self.enqueue_output, args=(adb_shell.stderr, stderr_queue))
+            stdout_thread.start()
+            stderr_thread.start()
+
+            # Step 1: Run `sy3` to initialize
+            adb_shell.stdin.write("/data/local/tmp/sy3\n")
+            adb_shell.stdin.flush()
+            print("<span style='color:green;'>Running sy3...</span>")
+
+            # Wait for `sy3` to initialize
+            time.sleep(5)
+
+            # Step 2: Define the interactive commands
+            interactive_commands = [
+                ("Executing service call 36...", "service call knoxguard_service 37"),
+                ("Executing service call 40 (bypass)...", "service call knoxguard_service 41 s16 'null'"),
+                ("Executing service call 39 (finalizing)...", "service call knoxguard_service 40"),
+            ]
+
+            # Step 3: Execute the commands in the adb shell
+            for log, command in interactive_commands:
+                print(f"<span style='color:green;'>{log}</span>")
+                adb_shell.stdin.write(command + "\n")
+                adb_shell.stdin.flush()
+                time.sleep(2)  # Add a delay to ensure the command processes correctly
+
+            # Step 4: Exit the adb shell
+            adb_shell.stdin.write("exit\n")
+            adb_shell.stdin.flush()
+            print("<span style='color:green;'>Exiting adb shell...</span>")
+
+            # Wait for threads to finish processing remaining output
+            stdout_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
+
+            # Log any remaining output
+            while not stdout_queue.empty():
+                print(f"<span style='color:green;'>STDOUT: {stdout_queue.get()}</span>")
+            while not stderr_queue.empty():
+                print(f"<span style='color:red;'>STDERR: {stderr_queue.get()}</span>")
+
+            adb_shell.wait()
+
+        except Exception as e:
+            print(f"<span style='color:red;'>Error: {str(e)}</span>")
+
+        # Step 5: Once the interactive portion is complete, run the remaining commands
+        self.run_remaining_commands()
+
+    def run_remaining_commands(self):
+        """Run commands after sant1 interactive mode."""
+        commands = [
+            ("Checking KG lock state (knox.kg.state)...", "adb shell getprop knox.kg.state"),
+            ("Removing temporary files...", "adb shell rm /data/local/tmp/*.*"),
+            ("Removing 'sant1' file...", "adb shell rm -rf /data/local/tmp/sys3"),
+            ("Rebooting the device...", "adb reboot"),
+        ]
+
+        # Start a new CommandThread for the remaining commands
+        self.command_thread = CommandThread(commands=commands, delay=1.0)
+        self.command_thread.log_signal.connect(self.parent.append_log)
+        self.command_thread.finished.connect(self.parent.enable_buttons)
+        self.command_thread.start()
 
 class CommandThread(QThread):
     log_signal = pyqtSignal(str)
@@ -59,10 +260,14 @@ class CommandThread(QThread):
 
             time.sleep(self.delay)
 
-  
     def stop(self):
         """Set the flag to stop the thread"""
         self.should_stop = True
+        
+
+
+  
+    
 
 def random_color():
     """Generate a random RGB color."""
@@ -90,6 +295,7 @@ def generate_qr_code(data):
 class UnlockToolUI(QMainWindow):
     def __init__(self):
         super().__init__()
+        
         
         # My Main Window Setting
         self.setWindowTitle("SANTO MDM TOOL VERSION 2.0.1 - Dark Mode")
@@ -196,7 +402,7 @@ class UnlockToolUI(QMainWindow):
             ("Read Info", self.read_device_info),
             ("List Devices", self.list_devices),
             ("Reboot Device", lambda: self.run_adb_command("reboot")),
-            ("Reboot to Bootloader", lambda: self.run_adb_command("reboot bootloader")),
+            ("Reboot to Bootloader", lambda: self.run_adb_command("reboot download")),
             ("Reboot to Fastboot", lambda: self.run_adb_command("reboot fastboot")),
             ("Install APK", self.install_apk),
             ("Pull File from Device", self.pull_file_from_device)
@@ -247,12 +453,12 @@ class UnlockToolUI(QMainWindow):
           # Add buttons and connect each to its action
         buttons = [
             ("Read Info", self.read_device_info),
-            ("Mtp Read info", self.list_devices),
             ("Generate QR code OS 12 - 14", self.generate_qr_code_dialog),
             ("Kg Locked to Active 01", self.KgLockToActive),
             ("Kg active os 13", self.KgActiveOs13),
             ("Remove Kg Os 14", self.remove_kg_os_14),
-            ("Remove Kg OS 13", lambda: self.removeKgOs13),
+            ("Remove Kg OS 13",  self.removeKgOs13),
+            ("Kg fix", self.kgFix),
             ("Bypass Knox Services", self.BypassKnoxServices),
              ("Disable Factory reset", self.disable_factory_reset1),
 
@@ -307,7 +513,7 @@ class UnlockToolUI(QMainWindow):
         self.disable_buttons
         commands = [
 
-            ("Wait for device...", "adb wait-device"),
+            ("Wait for device...", "adb wait-for-device"),
             # Blocking system update services
             ("Blocking System Update Services...", "adb shell pm uninstall --user 0 com.android.ons"),
             ("Blocking Dynamic System Updates...", "adb shell pm uninstall --user 0 com.android.dynsystem"),
@@ -366,8 +572,7 @@ class UnlockToolUI(QMainWindow):
         self.clear_log()
         self.disable_buttons
         commands = [
-
-
+            ("Waiting for device", "adb wait-for-device"),
             ("Bypass_1: Set inactive KG client...", "adb shell am set-inactive com.samsung.android.kgclient true"),
             ("Bypass_1: Crash KG client...", "adb shell am crash com.samsung.android.kgclient"),
             ("Bypass_1: Stop KG app...", "adb shell am stop-app com.samsung.android.kgclient"),
@@ -461,60 +666,104 @@ class UnlockToolUI(QMainWindow):
         # Run the commands with delay between each
         self.run_commands(commands, on_complete=self.enable_buttons)
 
+    def kgFix(self):
+        self.command_thread.stop()
+        self.clear_log()
+        self.disable_buttons()
+
+        # Define the commands
+        commands = [
+            ("Waiting for device", "adb wait-for-device"),
+            
+            # Blocking KLMS Agent
+            ("Blocking KLMS Agent...", "adb shell pm uninstall --user 0 com.samsung.klmsagent"),
+            
+            # Blocking Knox Cloud
+            ("Blocking Knox Cloud...", "adb shell pm uninstall --user 0 com.sec.enterprise.knox.cloudmdm.smdms"),
+            
+            # Deactivating Knox
+            ("Deactivating Knox...", "adb shell am set-inactive com.samsung.android.kgclient true"),
+            ("Killing Knox...", "adb shell am kill com.samsung.android.kgclient"),
+            ("Removing Knox...", "adb shell am crash com.samsung.android.kgclient"),
+            ("Stopping Knox...", "adb shell am stop-app com.samsung.android.kgclient"),
+            ("Stopping Knox Updates...", "adb shell pm uninstall-system-updates com.samsung.android.kgclient"),
+            ("Disabling Knox...", "adb shell pm disable-user --user 0 com.samsung.android.kgclient"),
+            ("Activating KG...", "adb shell pm enable --user 0 com.samsung.android.kgclient"),
+            ("Bypassing Knox...", "adb shell pm uninstall-system-updates com.samsung.android.kgclient"),
+            ("Suspending KG App...", "adb shell pm suspend com.samsung.android.kgclient"),
+            ("Removing MDM...", "adb shell pm uninstall --user 0 com.samsung.android.kgclient"),
+            
+            # Additional Knox client handling
+            ("Killing Permissions...", "adb shell pm install-existing --restrict-permissions --user 0 com.samsung.android.kgclient"),
+            ("Disabling RUN_IN_BACKGROUND...", "adb shell cmd appops set com.samsung.android.kgclient RUN_IN_BACKGROUND ignore"),
+            ("Disabling RUN_ANY_IN_BACKGROUND...", "adb shell cmd appops set com.samsung.android.kgclient RUN_ANY_IN_BACKGROUND deny"),
+            ("Disabling WAKE_LOCK...", "adb shell cmd appops set com.samsung.android.kgclient WAKE_LOCK deny"),
+            ("Disabling POST_NOTIFICATION...", "adb shell cmd appops set com.samsung.android.kgclient POST_NOTIFICATION deny"),
+            ("Disabling ACCESS_RESTRICTED_SETTINGS...", "adb shell cmd appops set com.samsung.android.kgclient ACCESS_RESTRICTED_SETTINGS deny"),
+            ("Disabling SCHEDULE_EXACT_ALARM...", "adb shell cmd appops set com.samsung.android.kgclient SCHEDULE_EXACT_ALARM deny"),
+            ("Disabling BLUETOOTH_CONNECT...", "adb shell cmd appops set com.samsung.android.kgclient BLUETOOTH_CONNECT deny"),
+            ("Disabling SYSTEM_EXEMPT_FROM_DISMISSIBLE_NOTIFICATIONS...", "adb shell cmd appops set com.samsung.android.kgclient SYSTEM_EXEMPT_FROM_DISMISSIBLE_NOTIFICATIONS deny"),
+            
+            # Reinstalling System UI and handling Fota Agent
+            ("Reinstalling System UI...", "adb shell pm install-existing --restrict-permissions --user 0 com.android.systemui"),
+            ("Stopping Fota Agent...", "adb shell am force-stop --user 0 com.sdet.fotaagent"),
+            ("Uninstalling Fota Agent...", "adb shell pm uninstall --user 0 com.sdet.fotaagent"),
+            
+            # Finalizing setup
+            ("Finalizing Setup...", "adb shell settings put global device_provisioned 1"),
+            ("Completing User Setup...", "adb shell settings put secure user_setup_complete 1"),
+            
+            # Rebooting device
+            ("Rebooting Device...", "adb reboot"),
+            ]
 
 
-    
+        # Execute commands in a separate thread
+        def execute_commands():
+            for description, command in commands:
+                self.append_log(description)  # Log description
+                process = self.run_command(command)  # Execute command
+                if process:
+                    self.append_log(process)  # Log command output if any
+            self.append_log("KG fix operation completed.")
+            self.enable_buttons()  # Re-enable buttons after completion
+
+        # Start the command execution thread
+        self.command_thread = threading.Thread(target=execute_commands, daemon=True)
+        self.command_thread.start()
+
+
+
+
     def KgLockToActive(self):
         self.command_thread.stop()
         self.clear_log()
         self.disable_buttons()
 
         ag_apk_path = self.get_asset_path("santo1")
-        ac_apk_path = self.get_asset_path("ac.apk")
 
         # Define all commands with log messages for each step
         commands = [
             ("Waiting for ADB devices...", "adb devices"),
-
-            # Downloading APK
-            ("Pushing santo1...", f'adb push "{self.get_asset_path('sant1')}" /data/local/tmp/sant1'),
-
-            # Set executable permissions and run KG bypass tool
+            ("Pushing santo1...", f'adb push "{self.get_asset_path("sant1")}" /data/local/tmp/sant1'),
             ("Setting executable permissions for 'sant1'...", "adb shell chmod +x /data/local/tmp/sant1"),
-            ("Running the KG bypass tool...", "adb shell /data/local/temp/sant1"),
-            ("Waiting for bypass operation to complete...", "ping -n 8 127.0.0.1 > nul"),
-
-            # Execute Knox Guard service calls
-            ("Executing Knox Guard service call 36...", "adb shell service call knoxguard_service 36"),
-            ("Executing Knox Guard service call 40 with 'null' argument...", "adb shell service call knoxguard_service 40 s16 'null'"),
-            ("Executing Knox Guard service call 39...", "adb shell service call knoxguard_service 39"),
-            ("Waiting briefly for services to respond...", "ping -n 3 127.0.0.1 > nul"),
-
-            # Check KG lock state
-            ("Checking KG lock state (knox.kg.state)...", "adb shell getprop knox.kg.state"),
-            ("Checking KG lock state (kg.knox.state)...", "adb shell getprop kg.knox.state"),
-
-            # Clean up temporary files
-            ("Removing temporary files...", "adb shell rm /data/local/tmp/*.*"),
-            ("Removing 'sant1' file...", "adb shell rm -rf /data/local/tmp/sant1"),
-          
-
-            # Stop and uninstall the FOTA agent
-            ("Stopping FOTA agent service...", "adb shell am force-stop --user 0 com.sdet.fotaagent"),
-            ("Uninstalling FOTA agent app...", "adb shell pm uninstall --user 0 com.sdet.fotaagent"),
-
-            # Final KG state check
-            ("Checking KG lock state one last time...", "adb shell getprop knox.kg.state"),
-
-            # Reboot the device
-            ("Rebooting the device...", "adb reboot"),
         ]
 
-        # Display starting log
+        # Log the start of the process
         self.log_area.append("<span style='color:white;'>Starting KG Lock to Active...</span>")
 
-        # Run commands with delay between each
-        self.run_commands(commands, on_complete=self.enable_buttons)
+        # Start CommandThread with initial commands
+        self.command_thread = CommandThread(commands=commands, delay=1.0)
+        self.command_thread.log_signal.connect(self.append_log)
+
+        # After the initial commands are completed, run the interactive thread
+        self.command_thread.finished.connect(self.start_interactive_thread)
+        self.command_thread.start()
+
+    def start_interactive_thread(self):
+        self.interactive_thread = RunInteractiveThread(self)
+        self.interactive_thread.start()
+
 
 
 
@@ -523,7 +772,7 @@ class UnlockToolUI(QMainWindow):
         self.clear_log() 
         self.disable_buttons()
 
-        # Define the ADB commands and log messages
+
         commands = [ 
             ("Waiting for the device", "adb wait-for-device"),
             ("Uninstalling Knox Bridge", "adb shell pm uninstall -k --user 0 com.sec.knox.bridge"),
@@ -564,31 +813,34 @@ class UnlockToolUI(QMainWindow):
         path_3_sys = self.get_asset_path("sys3")
             # Define all commands with log messages for each step
         commands = [
-            ("Starting KG Lock to Active process...", None),
             # Install APKs on the device
+            ("Installing santo2 on the device.. wait", f' adb push "{path_3_sys}" /data/local/tmp/'),
             ("Installing santo1.apk on the device...", f'adb install -i PrePackageInstaller "{path_1_apk}"'),
             ("Installing santo2.apk on the device...", f'adb install -i PrePackageInstaller "{path_2_apk}"'),
-            ("Simulating wait on the screen...", "timeout /t 4 /nobreak"),
-            # Initialize ADB process
-            ("Initializing ADB process...", f'adb push "{path_3_sys}" /data/local/tmp/sys3'),
-            ("Granting execute permissions...", "adb shell chmod +x /data/local/tmp/sys3"),
-            ("Running the script on the device...", "adb shell ./data/local/tmp/sys3"),
-            ("Starting Factory Test Launcher...", 
-            "adb shell am start -n com.samsung.android.FactoryTestLauncher/com.samsung.android.FactoryTestLauncher.addons.Shell.ShellActivity"),
-            ("Calling santo service 37...", "adb shell service call knoxguard_service 37"),
-            ("Simulating wait on the screen again...", "timeout /t 4 /nobreak"),
-            ("Nullifying santo call 41...", "adb shell service call knoxguard_service 41 s16 'null'"),
-            ("Simulating another wait...", "timeout /t 4 /nobreak"),
-            ("Executing call santo 40...", "adb shell service call knoxguard_service 40"),
-            ("Checking KG status...", "adb shell getprop knox.kg.state"),
-            ("Rebooting your device...", "adb reboot"),
+            ("Running kg bypass tool", f'adb shell am start -n com.sec.android.app.audiocoredebug/com.sec.android.app.audiocoredebug.MainActivity'),
+            
+            
+
         ]
 
-        # Display a starting log in white
-        self.log_area.append("<span style='color:white;'>Starting KG Lock to Active process...</span>")
+            # Start CommandThread with initial commands
+        self.command_thread = CommandThread(commands=commands, delay=1.0)
+        self.command_thread.log_signal.connect(self.append_log)
+        
+        self.command_thread.finished.connect(self.start_kgos13_thread)
+        self.command_thread.start()
 
-        # Run the commands with delay between each
-        self.run_commands(commands, on_complete=self.enable_buttons)
+    def start_kgos13_thread(self):
+        self.interactive_thread = RunKgActiveOS13Thread(self)
+        self.interactive_thread.start()
+        
+
+
+        
+
+      
+
+        
 
 
 
@@ -654,7 +906,7 @@ class UnlockToolUI(QMainWindow):
             ("Checking device authorization...", "adb devices"),
             
             # Install APK
-            ("Installing dis.apk...", f'adb install "{self.get_asset_path("dis.apk")}"'),
+            ("Installing santo.apk...", f'adb install "{self.get_asset_path("dis.apk")}"'),
 
             # Set as device administrator
             ("Activating device owner mode...", 
@@ -730,7 +982,6 @@ class UnlockToolUI(QMainWindow):
             ("Blocking Proxy Handler...", "adb shell pm uninstall --user 0 com.android.proxyhandler"),
             
             # Install APK
-            ("Installing PM APK...", 'adb install -r "data\\PM.apk"'),
 
             # MDM removal methods
             ("MDM Remove Method 1...", "adb shell service call package 135 s16 com.scorpio.securitycom i32 0 i32 0"),
@@ -783,9 +1034,7 @@ class UnlockToolUI(QMainWindow):
             ("Blocking Carrier Config...", "adb shell pm uninstall --user 0 com.android.carrierconfig"),
             ("Blocking Proxy Handler...", "adb shell pm uninstall --user 0 com.android.proxyhandler"),
             ("Blocking Transsion platform app update duplicate...", "adb shell pm uninstall --user 0 com.transsion.plat.appupdate"),
-            
-            # Install APK
-            ("Installing PM APK...", 'adb install -r "data\\PM.apk"'),
+        
 
             # Additional MDM removal methods
             ("MDM Remove Method 1...", "adb shell service call package 135 s16 com.scorpio.securitycom i32 0 i32 0"),
@@ -816,10 +1065,10 @@ class UnlockToolUI(QMainWindow):
             # Check if ADB is accessible
             ("Checking if ADB is accessible...", "adb devices"),
 
-            # Block G
+           
             ("Blocking Google Services Framework (G)...", "adb shell pm disable --user 0 com.google.android.gsf"),
             
-            # Block G2
+         
             ("Blocking Google Services Framework (G2)...", "adb shell pm disable-user com.google.android.gsf"),
 
             # Block G3
@@ -917,9 +1166,12 @@ class UnlockToolUI(QMainWindow):
 
 
 
+
+
     def read_device_info(self):
-        self.clear_log
+        self.clear_log()
         self.command_thread.stop()
+
         properties = {
             "ro.product.model": "Model",
             "ro.product.manufacturer": "Manufacturer",
@@ -934,20 +1186,27 @@ class UnlockToolUI(QMainWindow):
             "ro.build.version.security_patch": "Security Patch",
             "ro.build.description": "Build Description",
             "knox.kg.state": "Kg State",
-           
         }
 
         device_info = {}
         for prop, label in properties.items():
             command = ["adb", "shell", "getprop", prop]
             try:
-                output = subprocess.check_output(command).decode("utf-8").strip()
+                # Suppress the console window
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                output = subprocess.check_output(
+                    command,
+                    startupinfo=startupinfo,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                ).decode("utf-8").strip()
                 device_info[label] = output if output else "N/A"
             except subprocess.CalledProcessError:
                 device_info[label] = "N/A"
 
         log_message = "\n".join(f"{label}: {value}" for label, value in device_info.items())
         self.log_action(f"Device Info:\n{log_message}")
+
 
 
         
@@ -1103,12 +1362,77 @@ class UnlockToolUI(QMainWindow):
         self.append_log("Listing Fastboot devices...")
         self.run_command("fastboot devices")
 
-   
+
+
+class PasswordDialog(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Authentication Required")
+        self.setFixedSize(400, 200)
+        self.init_ui()
+
+    def init_ui(self):
+        # Set layout
+        layout = QVBoxLayout()
+
+        # Add title label
+        title_label = QLabel("Enter Password")
+        title_label.setFont(QFont("Arial", 16, QFont.Bold))
+        title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_label)
+
+        # Add input field
+        self.password_input = QLineEdit()
+        self.password_input.setPlaceholderText("Password")
+        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setFont(QFont("Arial", 12))
+        layout.addWidget(self.password_input)
+
+        # Add button
+        submit_button = QPushButton("Submit")
+        submit_button.setFont(QFont("Arial", 12))
+        submit_button.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #0078d4; 
+                color: white; 
+                padding: 8px 16px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #005a9e;
+            }
+            """
+        )
+        submit_button.clicked.connect(self.verify_password)
+        layout.addWidget(submit_button)
+
+        # Set layout to dialog
+        self.setLayout(layout)
+
+    def verify_password(self):
+        correct_password = "INFOSHOULDBEFREESANTO254"
+        entered_password = self.password_input.text()
+
+        if entered_password == correct_password:
+            QMessageBox.information(self, "Access Granted", "Welcome!")
+            self.accept()  # Close the dialog and allow the app to continue
+        else:
+            QMessageBox.warning(self, "Access Denied", "Incorrect password. Please try again.")
+            self.password_input.clear()  # Clear
   
 
 
 if __name__ == '__main__':
+   
+    
+    
     app = QApplication(sys.argv)
-    window = UnlockToolUI()
-    window.show()
+    dialog = PasswordDialog()
+    if dialog.exec_() == QDialog.Accepted:
+        # Your main application logic goes here
+        print("Running the main application...")
+        # Replace this print statement with your app logic
+        window = UnlockToolUI()
+        window.show()
     sys.exit(app.exec_())

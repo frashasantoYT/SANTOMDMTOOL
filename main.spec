@@ -5,9 +5,10 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas = [
-    ('assets/*', 'data'), 
-    ('frasha.ico', '.') ],
+    datas=[
+    ('assets/*', 'assets'), 
+    (r'C:\Users\Luise Nzomo\Desktop\boomsanto\lion.ico', '.')   
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -37,4 +38,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['lion.ico'], 
 )

@@ -174,15 +174,16 @@ class RunKgActiveOS13Thread(QThread):
             stderr_thread.start()
 
             # Step 1: Run `sy3` to initialize
-            adb_shell.stdin.write("/data/local/tmp/sy3\n")
+            adb_shell.stdin.write("/data/local/tmp/sys3\n")
             adb_shell.stdin.flush()
-            print("<span style='color:green;'>Running sy3...</span>")
+            print("<span style='color:green;'>Running sys3...</span>")
 
             # Wait for `sy3` to initialize
             time.sleep(5)
 
             # Step 2: Define the interactive commands
             interactive_commands = [
+                ("Running SANTO kg Bypass tool...", "am start -n com.samsung.android.FactoryTestLauncher/com.samsung.android.FactoryTestLauncher.addons.Shell.ShellActivity"),
                 ("Executing service call 36...", "service call knoxguard_service 37"),
                 ("Executing service call 40 (bypass)...", "service call knoxguard_service 41 s16 'null'"),
                 ("Executing service call 39 (finalizing)...", "service call knoxguard_service 40"),
@@ -222,9 +223,9 @@ class RunKgActiveOS13Thread(QThread):
         """Run commands after sant1 interactive mode."""
         commands = [
             ("Checking KG lock state (knox.kg.state)...", "adb shell getprop knox.kg.state"),
-            ("Removing temporary files...", "adb shell rm /data/local/tmp/*.*"),
             ("Removing 'sant1' file...", "adb shell rm -rf /data/local/tmp/sys3"),
             ("Rebooting the device...", "adb reboot"),
+            
         ]
 
         # Start a new CommandThread for the remaining commands
@@ -578,14 +579,11 @@ class UnlockToolUI(QMainWindow):
             ("Bypass_1: Stop KG app...", "adb shell am stop-app com.samsung.android.kgclient"),
             ("Bypass_1: Uninstall KG system updates...", "adb shell pm uninstall-system-updates com.samsung.android.kgclient"),
             ("Bypass_1: Disable KG user...", "adb shell pm disable-user --user 0 com.samsung.android.kgclient"),
-            ("Bypass_1: Uninstall KG client...", "adb shell pm uninstall com.samsung.android.kgclient"),
+            ("Bypass_1: Uninstall KG client...", "adb shell pm uninstall --user 0 com.samsung.android.kgclient"),
             ("Bypass_1: Clear KG client data...", "adb shell pm clear com.samsung.android.kgclient"),
             ("Bypass_1: Enable KG client...", "adb shell pm enable --user 0 com.samsung.android.kgclient"),
             ("Bypass_1: Reinstall KG client with restricted permissions...", "adb shell pm install-existing --restrict-permissions --user 0 com.samsung.android.kgclient"),
             ("Bypass_1: Set RUN_IN_BACKGROUND ignore...", "adb shell cmd appops set com.samsung.android.kgclient RUN_IN_BACKGROUND ignore"),
-
-            ("Bypass 1 completed Enjoy our tool...✅", 'timeout /t 2'), 
-
             ("Bypass_2: Clear KG client data again...", "adb shell pm clear com.samsung.android.kgclient"),
             ("Bypass_2: Set RUN_IN_BACKGROUND ignore again...", "adb shell cmd appops set com.samsung.android.kgclient RUN_IN_BACKGROUND ignore"),
             ("Bypass_2: Suspend KG client...", "adb shell pm suspend com.samsung.android.kgclient"),
@@ -601,18 +599,14 @@ class UnlockToolUI(QMainWindow):
             ("Bypass_2: Deny POST_NOTIFICATION permissions...", "adb shell cmd appops set com.samsung.android.kgclient ACCESS_RESTRICTED_SETTINGS deny"),
             ("Bypass_2: Deny POST_NOTIFICATION permissions...", "adb shell cmd appops set com.samsung.android.kgclient SCHEDULE_EXACT_ALARM deny"),
             ("Bypass_2: Deny POST_NOTIFICATION permissions...", "adb shell cmd appops set com.samsung.android.kgclient BLUETOOTH_CONNECT deny"),
-            ("Bypass_2: santo crashing kg", "adb shell cmd appops set com.samsung.android.kgclient SYSTEM_EXEMPT_FROM_DISMISSIBLE_NOTIFICATIONS deny "), 
-            ("Bypass_2: santo restoring system ui", "adb shell pm install-existing --restrict-permissions --user 0 com.android.systemui"),
-
-            ("Byass 2 completed Enjoy our tool..✅", 'timeout /t 2'), 
-
+            ("Bypass_2: santo restoring system ui", "adb shell pm install-existing --restrict-permissions --user 0 com.android.systemui"), 
             ("Bypass_3: Uninstall Knox components...", "adb shell pm uninstall --user 0 com.samsung.klmsagent"),
             ("Bypass_3: Uninstall Knox push manager...", "adb shell pm uninstall --user 0 com.samsung.android.knox.pushmanager"),
             ("Bypass_3: Uninstall Google setup wizard...", "adb shell pm uninstall --user 0 com.google.android.setupwizard"),
             ("Bypass_3: Uninstall system updater components...", "adb shell pm uninstall --user 0 com.android.dynsystem"),
             ("Bypass_3: Uninstall Knox analytics uploader...", "adb shell pm uninstall --user 0 com.samsung.android.knox.analytics.uploader"),
             ("Finalizing...", 'timeout /t 2'),
-            ("Wait for device...", "adb wait-device"),
+            ("Wait for device...", "adb wait-for-device"),
             # Blocking system update services
             ("Blocking System Update Services...", "adb shell pm uninstall --user 0 com.android.ons"),
             ("Blocking Dynamic System Updates...", "adb shell pm uninstall --user 0 com.android.dynsystem"),
@@ -680,7 +674,6 @@ class UnlockToolUI(QMainWindow):
             
             # Blocking Knox Cloud
             ("Blocking Knox Cloud...", "adb shell pm uninstall --user 0 com.sec.enterprise.knox.cloudmdm.smdms"),
-            
             # Deactivating Knox
             ("Deactivating Knox...", "adb shell am set-inactive com.samsung.android.kgclient true"),
             ("Killing Knox...", "adb shell am kill com.samsung.android.kgclient"),
@@ -814,10 +807,11 @@ class UnlockToolUI(QMainWindow):
             # Define all commands with log messages for each step
         commands = [
             # Install APKs on the device
-            ("Installing santo2 on the device.. wait", f' adb push "{path_3_sys}" /data/local/tmp/'),
             ("Installing santo1.apk on the device...", f'adb install -i PrePackageInstaller "{path_1_apk}"'),
             ("Installing santo2.apk on the device...", f'adb install -i PrePackageInstaller "{path_2_apk}"'),
             ("Running kg bypass tool", f'adb shell am start -n com.sec.android.app.audiocoredebug/com.sec.android.app.audiocoredebug.MainActivity'),
+            ("Installing santo2 on the device.. wait", f' adb push "{path_3_sys}" /data/local/tmp/'),
+            ("Preparing santo2...", f'adb shell chmod +x /data/local/tmp/sys3')
             
             
 

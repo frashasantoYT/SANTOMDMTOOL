@@ -176,7 +176,6 @@ class RunKgActiveOS13Thread(QThread):
             # Step 1: Run `sy3` to initialize
             adb_shell.stdin.write("/data/local/tmp/sys3\n")
             adb_shell.stdin.flush()
-            print("<span style='color:green;'>Running sys3...</span>")
 
             # Wait for `sy3` to initialize
             time.sleep(5)
@@ -191,7 +190,7 @@ class RunKgActiveOS13Thread(QThread):
 
             # Step 3: Execute the commands in the adb shell
             for log, command in interactive_commands:
-                print(f"<span style='color:green;'>{log}</span>")
+               
                 adb_shell.stdin.write(command + "\n")
                 adb_shell.stdin.flush()
                 time.sleep(2)  # Add a delay to ensure the command processes correctly
@@ -199,7 +198,7 @@ class RunKgActiveOS13Thread(QThread):
             # Step 4: Exit the adb shell
             adb_shell.stdin.write("exit\n")
             adb_shell.stdin.flush()
-            print("<span style='color:green;'>Exiting adb shell...</span>")
+          
 
             # Wait for threads to finish processing remaining output
             stdout_thread.join(timeout=5)
@@ -207,9 +206,9 @@ class RunKgActiveOS13Thread(QThread):
 
             # Log any remaining output
             while not stdout_queue.empty():
-                print(f"<span style='color:green;'>STDOUT: {stdout_queue.get()}</span>")
+                self.parent.log_signal.emit(f"<span style='color:green;'>STDOUT: {stdout_queue.get()}</span>")
             while not stderr_queue.empty():
-                print(f"<span style='color:red;'>STDERR: {stderr_queue.get()}</span>")
+                self.parent.log_signal.emit(f"<span style='color:green;'>STDOUT: {stdout_queue.get()}</span>")
 
             adb_shell.wait()
 
